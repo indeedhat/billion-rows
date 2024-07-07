@@ -1,10 +1,13 @@
 # Billion row challenge
-Bare minimum to run the file
+split reading and parsing into seperate goroutines
+
+I suspected this might be a little slower due to the inclusion of a poorly optimized chanel but i 
+wasn't expecting such an impact
 
 ## current implementation measurement
-real    2m57.614s
-user    2m49.981s
-sys     0m11.573s
+real    6m46.305s
+user    18m35.770s
+sys     2m54.213s
 
 ## Baseline measurements
 real    3m49.808s

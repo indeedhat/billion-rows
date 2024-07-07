@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type DataSet struct {
@@ -44,35 +45,45 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	data := load()
-	output(data)
+	inputCh := make(chan string, 100)
+	go readFromFile(inputCh)
+
+	outputCh := make(chan map[string]*DataSet)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go parseData(inputCh, outputCh, &wg)
+	}
+
+	dataCh := combineOutputCh(outputCh)
+
+	wg.Wait()
+	close(outputCh)
+
+	output(<-dataCh)
 }
 
-func load() map[string]*DataSet {
-	resuts := make(map[string]*DataSet)
+func parseData(inputCh chan string, outputCh chan map[string]*DataSet, wg *sync.WaitGroup) {
+	defer wg.Done()
 
-	fh, err := os.Open("dataset/measurements.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer fh.Close()
+	results := make(map[string]*DataSet)
 
-	scanner := bufio.NewScanner(fh)
-	for scanner.Scan() {
-		line := scanner.Text()
+	for line := range inputCh {
 		parts := strings.Split(line, ";")
 
 		if len(parts) != 2 {
 			log.Fatalf("found bad line, %s", line)
 		}
 
-		entry, ok := resuts[string(parts[0])]
+		entry, ok := results[string(parts[0])]
 		if !ok {
 			entry = &DataSet{
 				Min: math.MaxFloat64,
 				Max: math.SmallestNonzeroFloat64,
 			}
-			resuts[string(parts[0])] = entry
+			results[string(parts[0])] = entry
 		}
 
 		f, _ := strconv.ParseFloat(parts[1], 64)
@@ -87,7 +98,51 @@ func load() map[string]*DataSet {
 		}
 	}
 
-	return resuts
+	outputCh <- results
+}
+
+func readFromFile(inputCh chan string) {
+	fh, err := os.Open("dataset/measurements.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer fh.Close()
+	defer close(inputCh)
+
+	scanner := bufio.NewScanner(fh)
+	for scanner.Scan() {
+		inputCh <- scanner.Text()
+	}
+}
+
+func combineOutputCh(outputCh chan map[string]*DataSet) chan map[string]*DataSet {
+	resultCh := make(chan map[string]*DataSet, 1)
+
+	go func() {
+		final := make(map[string]*DataSet)
+
+		for result := range outputCh {
+			for k, v := range result {
+				if entry, ok := final[k]; ok {
+					entry.Count += v.Count
+					entry.Total += v.Total
+
+					if v.Min < entry.Min {
+						entry.Min = v.Min
+					}
+					if v.Max > entry.Max {
+						entry.Max = v.Max
+					}
+				} else {
+					final[k] = v
+				}
+			}
+		}
+
+		resultCh <- final
+	}()
+
+	return resultCh
 }
 
 func output(data map[string]*DataSet) {
