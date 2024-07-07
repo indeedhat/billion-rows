@@ -8,6 +8,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -45,14 +46,14 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	inputCh := make(chan string, 100)
+	inputCh := make(chan []string, 100)
 	go readFromFile(inputCh)
 
 	outputCh := make(chan map[string]*DataSet)
 
 	var wg sync.WaitGroup
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < runtime.NumCPU()-1; i++ {
 		wg.Add(1)
 		go parseData(inputCh, outputCh, &wg)
 	}
@@ -65,43 +66,45 @@ func main() {
 	output(<-dataCh)
 }
 
-func parseData(inputCh chan string, outputCh chan map[string]*DataSet, wg *sync.WaitGroup) {
+func parseData(inputCh chan []string, outputCh chan map[string]*DataSet, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	results := make(map[string]*DataSet)
 
-	for line := range inputCh {
-		parts := strings.Split(line, ";")
+	for batch := range inputCh {
+		for _, line := range batch {
+			parts := strings.Split(line, ";")
 
-		if len(parts) != 2 {
-			log.Fatalf("found bad line, %s", line)
-		}
-
-		entry, ok := results[string(parts[0])]
-		if !ok {
-			entry = &DataSet{
-				Min: math.MaxFloat64,
-				Max: math.SmallestNonzeroFloat64,
+			if len(parts) != 2 {
+				log.Fatalf("found bad line, %s", line)
 			}
-			results[string(parts[0])] = entry
-		}
 
-		f, _ := strconv.ParseFloat(parts[1], 64)
+			entry, ok := results[string(parts[0])]
+			if !ok {
+				entry = &DataSet{
+					Min: math.MaxFloat64,
+					Max: math.SmallestNonzeroFloat64,
+				}
+				results[string(parts[0])] = entry
+			}
 
-		entry.Count++
-		entry.Total += f
-		if f < entry.Min {
-			entry.Min = f
-		}
-		if f > entry.Max {
-			entry.Max = f
+			f, _ := strconv.ParseFloat(parts[1], 64)
+
+			entry.Count++
+			entry.Total += f
+			if f < entry.Min {
+				entry.Min = f
+			}
+			if f > entry.Max {
+				entry.Max = f
+			}
 		}
 	}
 
 	outputCh <- results
 }
 
-func readFromFile(inputCh chan string) {
+func readFromFile(inputCh chan []string) {
 	fh, err := os.Open("dataset/measurements.txt")
 	if err != nil {
 		log.Fatal(err)
@@ -109,9 +112,23 @@ func readFromFile(inputCh chan string) {
 	defer fh.Close()
 	defer close(inputCh)
 
-	scanner := bufio.NewScanner(fh)
+	var (
+		i       int
+		lines   = make([]string, 0, 100)
+		scanner = bufio.NewScanner(fh)
+	)
 	for scanner.Scan() {
-		inputCh <- scanner.Text()
+		lines = append(lines, scanner.Text())
+		i++
+		if i == 100 {
+			inputCh <- lines
+			lines = make([]string, 0, 100)
+			i = 0
+		}
+	}
+
+	if len(lines) > 0 {
+		inputCh <- lines
 	}
 }
 
