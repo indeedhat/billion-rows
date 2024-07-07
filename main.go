@@ -12,7 +12,6 @@ import (
 	"runtime/pprof"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 )
 
@@ -70,10 +69,12 @@ func parseData(inputCh chan []string, outputCh chan map[string]*DataSet, wg *syn
 	defer wg.Done()
 
 	results := make(map[string]*DataSet)
+	parts := make([]string, 2)
 
 	for batch := range inputCh {
 		for _, line := range batch {
-			parts := strings.Split(line, ";")
+			// parts := strings.Split(line, ";")
+			doSplitOnSemi(line, parts)
 
 			if len(parts) != 2 {
 				log.Fatalf("found bad line, %s", line)
@@ -102,6 +103,16 @@ func parseData(inputCh chan []string, outputCh chan map[string]*DataSet, wg *syn
 	}
 
 	outputCh <- results
+}
+
+func doSplitOnSemi(str string, out []string) {
+	for i := 0; i < 1000; i++ {
+		if str[i] == ';' {
+			out[0] = str[:i]
+			out[1] = str[i:]
+			return
+		}
+	}
 }
 
 func readFromFile(inputCh chan []string) {

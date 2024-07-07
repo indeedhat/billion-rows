@@ -1,7 +1,12 @@
 # Billion row challenge
-using a more sensible approach of batching input lines to send to the go routines
+cusom split logic replaces strings.Split
 
 ## current implementation measurement
+real    1m53.276s
+user    7m1.756s
+sys     0m56.645s
+
+## previous implementation measurement
 real    2m9.149s
 user    6m46.196s
 sys     0m49.941s
