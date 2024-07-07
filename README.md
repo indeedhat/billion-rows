@@ -2,9 +2,9 @@
 cusom split logic replaces strings.Split
 
 ## current implementation measurement
-real    1m53.276s
-user    7m1.756s
-sys     0m56.645s
+real    1m43.852s
+user    5m0.222s
+sys     0m41.819s
 
 ## previous implementation measurement
 real    2m9.149s
