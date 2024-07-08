@@ -6,20 +6,20 @@ import (
 )
 
 func main() {
-	fh, err := os.Open("dataset/measurements.txt")
+	fh, err := os.Open("read_test/example.text")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer fh.Close()
 
-	chunk := make([]byte, 1024*1024*128)
+	chunk := make([]byte, 500)
 
 	for {
-		len, err := fh.Read(chunk)
+		readLen, err := fh.Read(chunk)
 		if err != nil {
 			log.Fatal(err)
 		}
+		log.Printf("readLen(%d) len(%d) cap(%d)", readLen, len(chunk), cap(chunk))
 
-		log.Println(len)
 	}
 }

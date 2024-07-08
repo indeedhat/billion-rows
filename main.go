@@ -1,18 +1,23 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
-	"math"
 	"os"
 	"runtime"
 	"runtime/pprof"
 	"sort"
 	"strconv"
 	"sync"
+)
+
+const (
+	ChunkSize   = 32 * 1024 * 1024
+	DatasetPath = "dataset/measurements.txt"
 )
 
 type DataSet struct {
@@ -29,6 +34,7 @@ var (
 
 func main() {
 	flag.BoolVar(&profileCpu, "profile-cpu", false, "Create a cpu profile for the run")
+	flag.BoolVar(&profileMemory, "profile-mem", false, "Create a memory profile for the run")
 	flag.Parse()
 
 	if profileCpu {
@@ -45,106 +51,179 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	inputCh := make(chan []string, 100)
-	go readFromFile(inputCh)
+	var (
+		readWg      sync.WaitGroup
+		splitWg     sync.WaitGroup
+		readChan    = make(chan []byte, 10)
+		linesChan   = make(chan []string, 100)
+		resultsChan = make(chan map[string]DataSet, 100)
+	)
 
-	outputCh := make(chan map[string]*DataSet)
-
-	var wg sync.WaitGroup
-
-	for i := 0; i < runtime.NumCPU()-1; i++ {
-		wg.Add(1)
-		go parseData(inputCh, outputCh, &wg)
+	for i := 0; i < (runtime.NumCPU()/2)-1; i++ {
+		readWg.Add(1)
+		go readLines(i, linesChan, resultsChan, &readWg)
 	}
 
-	dataCh := combineOutputCh(outputCh)
+	for i := 0; i < (runtime.NumCPU()/2)-1; i++ {
+		splitWg.Add(1)
+		go splitChunks(readChan, linesChan, &splitWg)
+	}
 
-	wg.Wait()
-	close(outputCh)
+	go readChunks(readChan)
 
-	output(<-dataCh)
+	log.Println("waiting for split")
+	splitWg.Wait()
+
+	close(linesChan)
+
+	log.Println("waiting for read")
+	readWg.Wait()
+
+	log.Println("final")
+	finalChan := combineOutputCh(resultsChan)
+
+	close(resultsChan)
+
+	output(<-finalChan)
 }
 
-func parseData(inputCh chan []string, outputCh chan map[string]*DataSet, wg *sync.WaitGroup) {
+func doMemProfile(i int) {
+	log.Println("starting memory")
+	memFh, err := os.Create(fmt.Sprintf("mem_%d.prof", i))
+	if err != nil {
+		log.Fatal("Failed to create mem profile: ", err)
+	}
+	defer memFh.Close()
+
+	runtime.GC()
+	if err := pprof.WriteHeapProfile(memFh); err != nil {
+		log.Fatal("failed to run memory profiler: ", err)
+	}
+}
+
+func readLines(
+	idx int,
+	linesChan chan []string,
+	resultsChan chan map[string]DataSet,
+	wg *sync.WaitGroup,
+) {
 	defer wg.Done()
 
-	results := make(map[string]*DataSet)
-	parts := make([]string, 2)
+	results := make(map[string]DataSet)
 
-	for batch := range inputCh {
+	for batch := range linesChan {
 		for _, line := range batch {
-			doSplitOnSemi(line, parts)
-
-			entry, ok := results[string(parts[0])]
-			if !ok {
-				entry = &DataSet{
-					Min: math.MaxFloat64,
-					Max: math.SmallestNonzeroFloat64,
+			for i := 0; i < len(line); i++ {
+				if line[i] != ';' {
+					continue
 				}
-				results[string(parts[0])] = entry
-			}
 
-			f, _ := strconv.ParseFloat(parts[1], 64)
+				key := line[:i]
 
-			entry.Count++
-			entry.Total += f
-			if f < entry.Min {
-				entry.Min = f
-			}
-			if f > entry.Max {
-				entry.Max = f
+				f, _ := strconv.ParseFloat(line[i+1:], 64)
+				if entry, ok := results[key]; ok {
+					entry.Count++
+					entry.Total += f
+
+					if f < entry.Min {
+						entry.Min = f
+					}
+					if f > entry.Max {
+						entry.Max = f
+					}
+
+					results[key] = entry
+					continue
+				}
+
+				if len(results) > 420 {
+					continue
+				}
+				results[key] = DataSet{
+					Min:   f,
+					Max:   f,
+					Total: f,
+					Count: 1,
+				}
+
 			}
 		}
 	}
 
-	outputCh <- results
+	resultsChan <- results
 }
 
-func doSplitOnSemi(str string, out []string) {
-	for i := 0; i < 1000; i++ {
-		if str[i] == ';' {
-			out[0] = str[:i]
-			out[1] = str[i+1:]
-			return
+func splitChunks(readChan chan []byte, linesChan chan []string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for chunk := range readChan {
+		var (
+			lastIndex int
+			buf       = string(chunk)
+			lines     = make([]string, 0, 100)
+		)
+
+		for i := range chunk {
+			if chunk[i] != '\n' {
+				continue
+			}
+
+			lines = append(lines, buf[lastIndex+1:i])
+			lastIndex = i
+
+			if len(lines) == 100 {
+				linesChan <- lines
+				lines = make([]string, 0, 100)
+			}
+		}
+
+		if len(lines) > 0 {
+			linesChan <- lines
 		}
 	}
 }
 
-func readFromFile(inputCh chan []string) {
-	fh, err := os.Open("dataset/measurements.txt")
+func readChunks(readChan chan []byte) {
+	fh, err := os.Open(DatasetPath)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer fh.Close()
-	defer close(inputCh)
+	defer close(readChan)
 
 	var (
-		i       int
-		lines   = make([]string, 0, 100)
-		scanner = bufio.NewScanner(fh)
+		extraData = []byte{}
+		chunk     = make([]byte, ChunkSize)
 	)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-		i++
-		if i == 100 {
-			inputCh <- lines
-			lines = make([]string, 0, 100)
-			i = 0
+	for {
+		readLen, err := fh.Read(chunk)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			} else {
+				log.Fatal(err)
+			}
 		}
-	}
 
-	if len(lines) > 0 {
-		inputCh <- lines
+		newlineIdx := bytes.LastIndex(chunk[:readLen], []byte{'\n'})
+
+		buffer := make([]byte, newlineIdx)
+		copy(buffer, chunk)
+		buffer = append(extraData, chunk[:newlineIdx+1]...)
+
+		readChan <- buffer
+
+		extraData = make([]byte, readLen-(newlineIdx+1))
+		copy(extraData, chunk[newlineIdx+1:readLen])
 	}
 }
 
-func combineOutputCh(outputCh chan map[string]*DataSet) chan map[string]*DataSet {
-	resultCh := make(chan map[string]*DataSet, 1)
+func combineOutputCh(resultsChan chan map[string]DataSet) chan map[string]DataSet {
+	finalChan := make(chan map[string]DataSet, 1)
 
 	go func() {
-		final := make(map[string]*DataSet)
+		final := make(map[string]DataSet)
 
-		for result := range outputCh {
+		for result := range resultsChan {
 			for k, v := range result {
 				if entry, ok := final[k]; ok {
 					entry.Count += v.Count
@@ -156,19 +235,20 @@ func combineOutputCh(outputCh chan map[string]*DataSet) chan map[string]*DataSet
 					if v.Max > entry.Max {
 						entry.Max = v.Max
 					}
+					final[k] = entry
 				} else {
 					final[k] = v
 				}
 			}
 		}
 
-		resultCh <- final
+		finalChan <- final
 	}()
 
-	return resultCh
+	return finalChan
 }
 
-func output(data map[string]*DataSet) {
+func output(data map[string]DataSet) {
 	keys := make([]string, 0, len(data))
 	for k := range data {
 		keys = append(keys, k)
