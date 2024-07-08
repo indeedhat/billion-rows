@@ -1,18 +1,15 @@
 # Billion row challenge
-split into 3 distinct steps, read, split lines, parse
+i rewrote the whole script from scratch and removed the split lines step
 
-this does not work, when i let the map size of the parse step go over 423ish it runs away withe memory allocations and 
-crashes... except for very occasional runs that don't for some reason...
-
-i think im making it too complicated, maybe i step back to fewer stages and combine the split lines/parse steps
+this now runs fairly fast but consumes a huge amount of memory for some reason... like 20+GB
 
 ## current implementation measurement
-DNF
+real    0m14.626s
+user    3m24.901s
+sys     0m5.194s
 
 ## previous implementation measurement
-real    1m43.852s
-user    5m0.222s
-sys     0m41.819s
+DNF
 
 ## Baseline measurements
 real    3m49.808s
