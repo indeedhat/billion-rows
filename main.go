@@ -39,7 +39,7 @@ func main() {
 
 	var (
 		wg          sync.WaitGroup
-		chunkChan   = make(chan []byte, 10)
+		chunkChan   = make(chan string, 10)
 		resultsChan = make(chan map[string]*StationData, 10)
 		finalChan   = make(chan map[string]*StationData, 1)
 	)
@@ -89,11 +89,9 @@ func formatOutput(stationData map[string]*StationData) {
 	}
 	slices.Sort(keys)
 
-	buf.WriteByte('{')
-
 	for i, k := range keys {
 		entry := stationData[k]
-		buf.WriteString(fmt.Sprintf("%s=%.1f,%.1f,%.1f",
+		buf.WriteString(fmt.Sprintf("%s=%.1f/%.1f/%.1f",
 			k, float64(entry.Min)/10,
 			(float64(entry.Total)/10)/float64(entry.Count),
 			float64(entry.Max)/10),
@@ -104,12 +102,10 @@ func formatOutput(stationData map[string]*StationData) {
 		}
 	}
 
-	buf.WriteByte('}')
-
 	fmt.Print(buf.String())
 }
 
-func readChunkFromFile(chunkChan chan []byte) {
+func readChunkFromFile(chunkChan chan string) {
 	fh, err := os.OpenFile(FileName, os.O_RDONLY, 0644)
 	if err != nil {
 		log.Fatal("failed to open dataset: ", err)
@@ -118,10 +114,9 @@ func readChunkFromFile(chunkChan chan []byte) {
 
 	var (
 		extraData []byte
+		chunkData = make([]byte, ChunkSize)
 	)
 	for {
-		chunkData := make([]byte, ChunkSize)
-
 		readLen, err := fh.Read(chunkData)
 		if err != nil && errors.Is(err, io.EOF) {
 			break
@@ -129,10 +124,10 @@ func readChunkFromFile(chunkChan chan []byte) {
 
 		lastNewline := bytes.LastIndex(chunkData[:readLen], []byte{'\n'})
 
-		chunkChan <- append(extraData, chunkData[:lastNewline]...)
+		chunkChan <- string(append(extraData, chunkData[:lastNewline]...))
 
-		extraData = make([]byte, readLen-lastNewline)
-		copy(extraData, chunkData[lastNewline+1:])
+		extraData = make([]byte, readLen-lastNewline-1)
+		copy(extraData, chunkData[lastNewline+1:readLen])
 	}
 
 	close(chunkChan)
@@ -145,23 +140,23 @@ type StationData struct {
 	Count int
 }
 
-func parseChunkData(chunkChan chan []byte, resultsChan chan map[string]*StationData, wg *sync.WaitGroup) {
+func parseChunkData(chunkChan chan string, resultsChan chan map[string]*StationData, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	for chunkData := range chunkChan {
+	for stringData := range chunkChan {
 		var (
 			cursor      int
 			stationName string
-			stringData  = string(chunkData)
 			results     = make(map[string]*StationData)
 		)
+
 		for i, char := range stringData {
 			if char == ';' {
 				stationName = stringData[cursor:i]
 				cursor = i + 1
 			} else if char == '\n' {
 				temp := parseTemp(stringData[cursor:i])
-				cursor = i + 2
+				cursor = i + 1
 
 				if entry, ok := results[stationName]; ok {
 					entry.Count++

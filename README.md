@@ -1,15 +1,16 @@
 # Billion row challenge
-parse temps as a int64 (with bastardised parseuint from strconv) and convert back to floats at the output step
+- perform string conversion on chunk before passing to chunk channel to optimize memcopy
+- fix bug where i was creting a buffer 1 byte too large to deal with chunk overflow
 
 ## current implementation measurement
-real    0m11.882s
-user    1m17.480s
-sys     0m6.506s
+real    0m6.805s
+user    1m39.661s
+sys     0m2.179s
 
 ## previous implementation measurement
-real    0m12.663s
-user    2m25.145s
-sys     0m5.452s
+real    0m7.620s
+user    1m34.781s
+sys     0m4.370s
 
 ## Baseline measurements
 real    3m49.808s
