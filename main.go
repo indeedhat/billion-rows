@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"os"
 	"runtime"
 	"runtime/pprof"
 	"slices"
-	"strconv"
 	"sync"
 )
 
@@ -42,8 +40,8 @@ func main() {
 	var (
 		wg          sync.WaitGroup
 		chunkChan   = make(chan []byte, 10)
-		resultsChan = make(chan map[string]StationData, 10)
-		finalChan   = make(chan map[string]StationData, 1)
+		resultsChan = make(chan map[string]*StationData, 10)
+		finalChan   = make(chan map[string]*StationData, 1)
 	)
 
 	for i := 0; i < runtime.NumCPU()-1; i++ {
@@ -53,19 +51,21 @@ func main() {
 
 	go readChunkFromFile(chunkChan)
 	go func() {
-		results := make(map[string]StationData, 1000)
+		results := make(map[string]*StationData, 1000)
 		for r := range resultsChan {
 			for stationName, e := range r {
 				if entry, ok := results[stationName]; ok {
 					entry.Count += e.Count
 					entry.Total += e.Total
-					entry.Max = math.Max(entry.Max, e.Max)
-					entry.Min = math.Min(entry.Min, e.Min)
-					results[stationName] = entry
+					if e.Max > entry.Max {
+						entry.Max = e.Max
+					}
+					if e.Min < entry.Min {
+						entry.Min = e.Min
+					}
 				} else {
 					results[stationName] = e
 				}
-
 			}
 		}
 
@@ -78,7 +78,7 @@ func main() {
 	formatOutput(<-finalChan)
 }
 
-func formatOutput(stationData map[string]StationData) {
+func formatOutput(stationData map[string]*StationData) {
 	var (
 		buf  bytes.Buffer
 		keys []string
@@ -93,7 +93,11 @@ func formatOutput(stationData map[string]StationData) {
 
 	for i, k := range keys {
 		entry := stationData[k]
-		buf.WriteString(fmt.Sprintf("%s=%.1f,%.1f,%.1f", k, entry.Min, entry.Total/float64(entry.Count), entry.Max))
+		buf.WriteString(fmt.Sprintf("%s=%.1f,%.1f,%.1f",
+			k, float64(entry.Min)/10,
+			(float64(entry.Total)/10)/float64(entry.Count),
+			float64(entry.Max)/10),
+		)
 
 		if i < len(keys)-1 {
 			buf.WriteString(", ")
@@ -135,13 +139,13 @@ func readChunkFromFile(chunkChan chan []byte) {
 }
 
 type StationData struct {
-	Min   float64
-	Max   float64
-	Total float64
+	Min   int64
+	Max   int64
+	Total int64
 	Count int
 }
 
-func parseChunkData(chunkChan chan []byte, resultsChan chan map[string]StationData, wg *sync.WaitGroup) {
+func parseChunkData(chunkChan chan []byte, resultsChan chan map[string]*StationData, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for chunkData := range chunkChan {
@@ -149,36 +153,75 @@ func parseChunkData(chunkChan chan []byte, resultsChan chan map[string]StationDa
 			cursor      int
 			stationName string
 			stringData  = string(chunkData)
-			results     = make(map[string]StationData)
+			results     = make(map[string]*StationData)
 		)
 		for i, char := range stringData {
 			if char == ';' {
 				stationName = stringData[cursor:i]
 				cursor = i + 1
 			} else if char == '\n' {
-				temp, _ := strconv.ParseFloat(stringData[cursor:i], 64)
+				temp := parseTemp(stringData[cursor:i])
 				cursor = i + 2
 
 				if entry, ok := results[stationName]; ok {
 					entry.Count++
 					entry.Total += temp
-					entry.Max = math.Max(entry.Max, temp)
-					entry.Min = math.Min(entry.Min, temp)
-					results[stationName] = entry
+					if temp > entry.Max {
+						entry.Max = temp
+					}
+					if temp < entry.Min {
+						entry.Min = temp
+					}
 					continue
 				}
 
-				results[stationName] = StationData{
+				results[stationName] = &StationData{
 					Min:   temp,
 					Max:   temp,
 					Total: temp,
 					Count: 1,
 				}
-
 			}
 		}
 
 		stringData = ""
 		resultsChan <- results
 	}
+}
+
+func parseTemp(temp string) int64 {
+	var (
+		offset   int
+		negative bool
+	)
+
+	if temp[0] == '-' {
+		offset = 1
+		negative = true
+	}
+
+	w := parseUint(temp[offset:])
+
+	if negative {
+		return -int64(w)
+	}
+
+	return int64(w)
+}
+
+// parseUint64 is a stripped down version of strconv.ParseUint
+// i removed everythin not necessary for this task
+func parseUint(s string) uint64 {
+	base := 10
+	var n uint64
+	for _, c := range []byte(s) {
+		if c == '.' {
+			continue
+		}
+		d := c - '0'
+		n *= uint64(base)
+		n += uint64(d)
+	}
+
+	return n
 }

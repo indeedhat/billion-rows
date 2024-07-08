@@ -1,15 +1,15 @@
 # Billion row challenge
-i rewrote the whole script from scratch and removed the split lines step
-
-this now runs fairly fast but consumes a huge amount of memory for some reason... like 20+GB
+parse temps as a int64 (with bastardised parseuint from strconv) and convert back to floats at the output step
 
 ## current implementation measurement
-real    0m14.626s
-user    3m24.901s
-sys     0m5.194s
+real    0m11.882s
+user    1m17.480s
+sys     0m6.506s
 
 ## previous implementation measurement
-DNF
+real    0m12.663s
+user    2m25.145s
+sys     0m5.452s
 
 ## Baseline measurements
 real    3m49.808s
